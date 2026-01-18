@@ -1,0 +1,154 @@
+# scripts/eval_baseline_report.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Paper-grade evaluation for baseline ML:
+- Evaluate on fixed split (train/val/test) OR evaluate ALL rows (for Gold test set)
+- Apply per-label thresholds tuned from VAL
+- Print classification_report and summary metrics
+- IMPORTANT: keep preprocessing consistent with training (pyvi ViTokenizer if used)
+"""
+
+import argparse
+import json
+from pathlib import Path
+from typing import Dict, Any
+
+import joblib
+import numpy as np
+from sklearn.metrics import (
+    classification_report,
+    f1_score,
+    precision_score,
+    recall_score,
+)
+
+from scripts.make_splits_baseline import (
+    read_jsonl, load_labelmap, to_multihot, load_split_indices, sigmoid
+)
+
+
+def maybe_tokenize_vi(text: str, use_vitokenizer: bool) -> str:
+    if not use_vitokenizer:
+        return text
+    try:
+        from pyvi import ViTokenizer
+        return ViTokenizer.tokenize(text)
+    except Exception:
+        # fallback: no tokenizer installed
+        return text
+
+
+def load_use_vitokenizer(model_dir: Path) -> bool:
+    cfg_path = model_dir / "train_config.json"
+    if not cfg_path.exists():
+        return False
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        return bool(cfg.get("tfidf", {}).get("use_vitokenizer", False))
+    except Exception:
+        return False
+
+
+def load_thresholds(thresholds_json: str | None) -> Dict[str, float]:
+    if thresholds_json is None:
+        return {}
+    obj = json.loads(Path(thresholds_json).read_text(encoding="utf-8"))
+    out = {}
+    for label, info in obj.items():
+        if isinstance(info, dict) and "thr" in info:
+            out[label] = float(info["thr"])
+        elif isinstance(info, (int, float)):
+            out[label] = float(info)
+    return out
+
+
+def get_scores(model, X) -> np.ndarray:
+    if hasattr(model, "predict_proba"):
+        return np.asarray(model.predict_proba(X))
+    if hasattr(model, "decision_function"):
+        scores = np.asarray(model.decision_function(X))
+        return sigmoid(scores)
+    return np.asarray(model.predict(X)).astype(np.float32)
+
+
+def parse_args():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model_dir", required=True)
+    ap.add_argument("--data_path", required=True)
+    ap.add_argument("--labelmap_path", required=True)
+
+    # split_path: OPTIONAL (if not provided => eval ALL rows, suitable for Gold test set)
+    ap.add_argument("--split_path", default=None)
+    ap.add_argument("--split_name", default="test", choices=["train", "val", "test"])
+
+    ap.add_argument("--thresholds_json", default=None)
+    ap.add_argument("--threshold", type=float, default=0.5, help="fallback threshold if label missing")
+    ap.add_argument("--out_report", default=None)
+    ap.add_argument("--out_metrics", default=None)
+    return ap.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    model_dir = Path(args.model_dir)
+    model = joblib.load(model_dir / "model.pkl")
+    vectorizer = joblib.load(model_dir / "vectorizer.pkl")
+
+    label_names, label2id, _ = load_labelmap(Path(args.labelmap_path))
+    num_labels = len(label_names)
+
+    rows = read_jsonl(Path(args.data_path))
+
+    if args.split_path:
+        idxs = load_split_indices(Path(args.split_path), args.split_name)
+        subset = [rows[i] for i in idxs]
+    else:
+        subset = rows  # GOLD: evaluate all
+
+    use_vitokenizer = load_use_vitokenizer(model_dir)
+    texts = [maybe_tokenize_vi(r["text"], use_vitokenizer) for r in subset]
+    X = vectorizer.transform(texts)
+
+    y_true = np.stack([to_multihot(r, label2id, num_labels) for r in subset], axis=0)
+    probs = get_scores(model, X)
+
+    thr_map = load_thresholds(args.thresholds_json)
+    thr_vec = np.array([thr_map.get(name, args.threshold) for name in label_names], dtype=np.float32)
+    y_pred = (probs >= thr_vec[None, :]).astype(np.int64)
+
+    report = classification_report(
+        y_true,
+        y_pred,
+        target_names=label_names,
+        digits=4,
+        zero_division=0,
+    )
+    print(report)
+
+    metrics: Dict[str, Any] = {}
+    metrics["f1_micro"] = float(f1_score(y_true, y_pred, average="micro", zero_division=0))
+    metrics["f1_macro"] = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
+    metrics["f1_weighted"] = float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
+    metrics["precision_micro"] = float(precision_score(y_true, y_pred, average="micro", zero_division=0))
+    metrics["recall_micro"] = float(recall_score(y_true, y_pred, average="micro", zero_division=0))
+    metrics["exact_match"] = float(np.mean(np.all(y_true == y_pred, axis=1)))
+
+    print("\nSummary metrics:")
+    for k in ["f1_micro", "f1_macro", "f1_weighted", "precision_micro", "recall_micro", "exact_match"]:
+        print(f"- {k}: {metrics[k]:.6f}")
+
+    if args.out_report:
+        Path(args.out_report).write_text(report, encoding="utf-8")
+        print("Saved report:", args.out_report)
+
+    if args.out_metrics:
+        Path(args.out_metrics).write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("Saved metrics:", args.out_metrics)
+
+    print("\n")
+
+if __name__ == "__main__":
+    main()

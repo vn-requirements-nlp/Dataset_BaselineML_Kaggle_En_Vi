@@ -1,0 +1,8 @@
+pandas
+scikit-learn
+pyvi
+joblib
+matplotlib
+seaborn
+openpyxl
+catboost
