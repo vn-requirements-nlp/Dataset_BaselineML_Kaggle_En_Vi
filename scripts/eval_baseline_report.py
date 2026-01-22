@@ -85,6 +85,7 @@ def parse_args():
 
     ap.add_argument("--thresholds_json", default=None)
     ap.add_argument("--threshold", type=float, default=0.5, help="fallback threshold if label missing")
+    ap.add_argument("--run_name", default=None, help="Title to show on console/report header (e.g., 'VAL-SILVER | seed44 | Dataset_Full_VI')")
     ap.add_argument("--out_report", default=None)
     ap.add_argument("--out_metrics", default=None)
     return ap.parse_args()
@@ -126,6 +127,15 @@ def main():
         digits=4,
         zero_division=0,
     )
+    data_tag = Path(args.data_path).stem  # Dataset_Full_VI (nếu file là Dataset_Full_VI.jsonl)
+    mode = "ALL" if not args.split_path else args.split_name.upper()
+
+    # Nếu user truyền run_name thì dùng, không thì tự tạo title mặc định
+    title = args.run_name or f"{mode} | {data_tag}"
+
+    print("\n" + "="*90)
+    print(f"📊 Classification report (per label) | {title}")
+    print("="*90)
     print(report)
 
     metrics: Dict[str, Any] = {}
@@ -136,7 +146,7 @@ def main():
     metrics["recall_micro"] = float(recall_score(y_true, y_pred, average="micro", zero_division=0))
     metrics["exact_match"] = float(np.mean(np.all(y_true == y_pred, axis=1)))
 
-    print("\nSummary metrics:")
+    print("\n📌Summary metrics:")
     for k in ["f1_micro", "f1_macro", "f1_weighted", "precision_micro", "recall_micro", "exact_match"]:
         print(f"- {k}: {metrics[k]:.6f}")
 
