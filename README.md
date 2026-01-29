@@ -39,7 +39,7 @@ Tập tin hiện có:
 ## Hướng dẫn train
 Ví dụ train cho tập VI với Logistic Regression:
 ```bash
-python scripts/train_baseline_ml.py ^
+python scripts/baseline_train_ml.py ^
   --data_path data/Dataset_Full_VI.jsonl ^
   --labelmap_path data/labelmap_multilabel.json ^
   --split_path data/splits/split_seed42.json ^
@@ -56,7 +56,7 @@ Artifact tạo ra trong `--output_dir`:
 
 ## Tune thresholds (từ tập val)
 ```bash
-python scripts/tune_thresholds_baseline.py ^
+python scripts/baseline_tune_thresholds.py ^
   --model_dir models/baseline_vi/logreg/seed42 ^
   --data_path data/Dataset_Full_VI.jsonl ^
   --labelmap_path data/labelmap_multilabel.json ^
@@ -66,7 +66,7 @@ Output: `thresholds.json` trong `--model_dir`.
 
 ## Đánh giá
 ```bash
-python scripts/eval_baseline_report.py ^
+python scripts/baseline_eval_report.py ^
   --model_dir models/baseline_vi/logreg/seed42 ^
   --data_path data/Dataset_Full_VI.jsonl ^
   --labelmap_path data/labelmap_multilabel.json ^
@@ -79,14 +79,14 @@ Nếu muốn đánh giá toàn bộ tập (gold), bỏ qua `--split_path`.
 ## Dự đoán
 Dự đoán 1 câu:
 ```bash
-python scripts/predict_baseline.py ^
+python scripts/baseline_predict.py ^
   --model_dir models/baseline_vi/logreg/seed42 ^
   --text "Hệ thống phải khôi phục trong 5 giây"
 ```
 
 Dự đoán từ TXT và xuất CSV (Excel-friendly):
 ```bash
-python scripts/predict_baseline.py ^
+python scripts/baseline_predict.py ^
   --model_dir models/baseline_vi/logreg/seed42 ^
   --input_txt path/to/requirements.txt ^
   --output_csv outputs/pred.csv ^
@@ -97,3 +97,44 @@ python scripts/predict_baseline.py ^
 ## Ghi chú
 - File split hiện tại tham chiếu đến tập VI. Nếu dùng tập EN, hãy tạo split tương ứng và cập nhật `--split_path`.
 - `pyvi` được dùng để tokenize tiếng Việt; nếu không có, script sẽ tự động fallback.
+
+## K-fold splits (multi-label stratified)
+Create 10-fold splits (test=10%, val=10%, train=80%):
+```bash
+python scripts/baseline_make_splits.py ^
+  --data_path data/Dataset_Full_VI.jsonl ^
+  --labelmap_path data/labelmap_multilabel.json ^
+  --out_dir data/splits ^
+  --seed 42 ^
+  --n_splits 10 ^
+  --val_ratio 0.1 ^
+  --prefix split_kfold
+```
+
+Example train per fold:
+```bash
+python scripts/baseline_train_ml.py ^
+  --data_path data/Dataset_Full_VI.jsonl ^
+  --labelmap_path data/labelmap_multilabel.json ^
+  --split_path data/splits/split_kfold_seed42_fold0.json ^
+  --output_dir models/baseline_vi/logreg/seed42_fold0 ^
+  --algo logreg ^
+  --use_vitokenizer
+```
+
+## Seed words (optional)
+Provide a JSON like `data/seed_words.json` and pass `--seed_words_json` when training:
+```bash
+python scripts/baseline_train_ml.py ^
+  --data_path data/Dataset_Full_VI.jsonl ^
+  --labelmap_path data/labelmap_multilabel.json ^
+  --split_path data/splits/split_seed42.json ^
+  --output_dir models/baseline_vi/logreg/seed42 ^
+  --algo logreg ^
+  --use_vitokenizer ^
+  --seed_words_json data/seed_words.json
+```
+Seed words are converted to extra binary features (presence per label) and saved to `seed_words.json` in the model folder.
+
+## N-gram
+The training already uses TF-IDF n-grams via `--ngram_min` and `--ngram_max` (default 1-2).

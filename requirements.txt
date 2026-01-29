@@ -6,3 +6,4 @@ matplotlib
 seaborn
 openpyxl
 catboost
+iterative-stratification

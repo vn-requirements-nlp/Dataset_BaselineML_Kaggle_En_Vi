@@ -1,4 +1,4 @@
-# scripts/eval_baseline_report.py
+# scripts/baseline_eval_report.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -17,6 +17,7 @@ from typing import Dict, Any
 
 import joblib
 import numpy as np
+from scipy.sparse import load_npz
 from sklearn.metrics import (
     classification_report,
     f1_score,
@@ -24,8 +25,12 @@ from sklearn.metrics import (
     recall_score,
 )
 
-from scripts.make_splits_baseline import (
+from scripts.baseline_make_splits import (
     read_jsonl, load_labelmap, to_multihot, load_split_indices, sigmoid
+)
+from scripts.baseline_feature_utils import (
+    load_seed_words_from_model_dir, build_seed_features,
+    append_seed_features, seed_words_enabled
 )
 
 
@@ -82,6 +87,7 @@ def parse_args():
     # split_path: OPTIONAL (if not provided => eval ALL rows, suitable for Gold test set)
     ap.add_argument("--split_path", default=None)
     ap.add_argument("--split_name", default="test", choices=["train", "val", "test"])
+    ap.add_argument("--precomputed_dir", default=None, help="Use cached features (from baseline_precompute_fold_features.py)")
 
     ap.add_argument("--thresholds_json", default=None)
     ap.add_argument("--threshold", type=float, default=0.5, help="fallback threshold if label missing")
@@ -101,19 +107,30 @@ def main():
     label_names, label2id, _ = load_labelmap(Path(args.labelmap_path))
     num_labels = len(label_names)
 
-    rows = read_jsonl(Path(args.data_path))
-
-    if args.split_path:
-        idxs = load_split_indices(Path(args.split_path), args.split_name)
-        subset = [rows[i] for i in idxs]
+    if args.precomputed_dir:
+        if not args.split_path:
+            raise SystemExit("precomputed_dir requires --split_path and --split_name")
+        pre_dir = Path(args.precomputed_dir)
+        X = load_npz(pre_dir / f"X_{args.split_name}.npz")
+        y_true = np.load(pre_dir / f"Y_{args.split_name}.npy")
     else:
-        subset = rows  # GOLD: evaluate all
+        rows = read_jsonl(Path(args.data_path))
 
-    use_vitokenizer = load_use_vitokenizer(model_dir)
-    texts = [maybe_tokenize_vi(r["text"], use_vitokenizer) for r in subset]
-    X = vectorizer.transform(texts)
+        if args.split_path:
+            idxs = load_split_indices(Path(args.split_path), args.split_name)
+            subset = [rows[i] for i in idxs]
+        else:
+            subset = rows  # GOLD: evaluate all
 
-    y_true = np.stack([to_multihot(r, label2id, num_labels) for r in subset], axis=0)
+        use_vitokenizer = load_use_vitokenizer(model_dir)
+        texts = [maybe_tokenize_vi(r["text"], use_vitokenizer) for r in subset]
+        X = vectorizer.transform(texts)
+        seed_words_map = load_seed_words_from_model_dir(model_dir)
+        if seed_words_enabled(seed_words_map):
+            seed_feats = build_seed_features(texts, seed_words_map, label_names)
+            X = append_seed_features(X, seed_feats)
+
+        y_true = np.stack([to_multihot(r, label2id, num_labels) for r in subset], axis=0)
     probs = get_scores(model, X)
 
     thr_map = load_thresholds(args.thresholds_json)
@@ -133,9 +150,9 @@ def main():
     # Nếu user truyền run_name thì dùng, không thì tự tạo title mặc định
     title = args.run_name or f"{mode} | {data_tag}"
 
-    print("\n" + "="*90)
+    print("\n" + "="*100)
     print(f"📊 Classification report (per label) | {title}")
-    print("="*90)
+    print("="*100)
     print(report)
 
     metrics: Dict[str, Any] = {}

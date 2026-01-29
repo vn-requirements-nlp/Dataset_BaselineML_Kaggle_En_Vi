@@ -1,4 +1,4 @@
-# scripts/predict_baseline.py
+# scripts/baseline_predict.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -11,7 +11,11 @@ from typing import Dict, Any, List, Optional
 import joblib
 import numpy as np
 
-from scripts.make_splits_baseline import load_labelmap, sigmoid
+from scripts.baseline_make_splits import load_labelmap, sigmoid
+from scripts.baseline_feature_utils import (
+    load_seed_words_from_model_dir, build_seed_features,
+    append_seed_features, seed_words_enabled
+)
 
 
 def maybe_tokenize_vi(text: str, use_vitokenizer: bool) -> str:
@@ -86,7 +90,7 @@ def parse_args():
     # old output (keep)
     ap.add_argument("--output_jsonl", type=str, default=None, help="Write predictions to JSONL")
 
-    # new output like predict_multilabel.py
+    # new output like transformer_predict.py
     ap.add_argument("--output_csv", type=str, default=None, help="Write predictions to CSV UTF-8 with BOM (Excel-friendly)")
     ap.add_argument("--include_probs", action="store_true", help="Add per-label probability columns (suffix: __prob)")
     ap.add_argument("--include_active_labels", action="store_true", help="Add ActiveLabels column (labels predicted = 1)")
@@ -107,6 +111,8 @@ def main():
     labelmap_path = Path(args.labelmap_path) if args.labelmap_path else (model_dir / "labelmap.json")
     label_names, label2id, _ = load_labelmap(labelmap_path)
     num_labels = len(label_names)
+    seed_words_map = load_seed_words_from_model_dir(model_dir)
+    use_seed_words = seed_words_enabled(seed_words_map)
 
     thr_path = args.thresholds_json
     if thr_path is None:
@@ -120,6 +126,9 @@ def main():
     def predict_one(t_raw: str) -> Dict[str, Any]:
         t = maybe_tokenize_vi(t_raw, use_vitokenizer)
         X = vectorizer.transform([t])
+        if use_seed_words:
+            seed_feats = build_seed_features([t], seed_words_map, label_names)
+            X = append_seed_features(X, seed_feats)
         probs = get_scores(model, X)[0]  # (num_labels,)
         pred01 = (probs >= thr_vec).astype(int)
 

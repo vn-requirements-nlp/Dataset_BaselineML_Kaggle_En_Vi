@@ -1,4 +1,4 @@
-# scripts/tune_thresholds_baseline.py
+# scripts/baseline_tune_thresholds.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -9,10 +9,15 @@ from typing import Dict, Any
 
 import joblib
 import numpy as np
+from scipy.sparse import load_npz
 
-from scripts.make_splits_baseline import (
+from scripts.baseline_make_splits import (
     read_jsonl, load_labelmap, to_multihot, load_split_indices,
     sigmoid, best_threshold_for_label
+)
+from scripts.baseline_feature_utils import (
+    load_seed_words_from_model_dir, build_seed_features,
+    append_seed_features, seed_words_enabled
 )
 
 
@@ -53,6 +58,7 @@ def parse_args():
     ap.add_argument("--labelmap_path", required=True)
     ap.add_argument("--split_path", required=True)
     ap.add_argument("--split_name", default="val", choices=["train", "val", "test"])
+    ap.add_argument("--precomputed_dir", default=None, help="Use cached features (from baseline_precompute_fold_features.py)")
 
     ap.add_argument("--thr_min", type=float, default=0.05)
     ap.add_argument("--thr_max", type=float, default=0.95)
@@ -65,20 +71,30 @@ def main():
 
     model_dir = Path(args.model_dir)
     model = joblib.load(model_dir / "model.pkl")
-    vectorizer = joblib.load(model_dir / "vectorizer.pkl")
 
-    rows = read_jsonl(Path(args.data_path))
     label_names, label2id, _ = load_labelmap(Path(args.labelmap_path))
     num_labels = len(label_names)
 
-    idxs = load_split_indices(Path(args.split_path), args.split_name)
-    subset = [rows[i] for i in idxs]
+    if args.precomputed_dir:
+        pre_dir = Path(args.precomputed_dir)
+        X = load_npz(pre_dir / f"X_{args.split_name}.npz")
+        y_true = np.load(pre_dir / f"Y_{args.split_name}.npy")
+    else:
+        vectorizer = joblib.load(model_dir / "vectorizer.pkl")
+        rows = read_jsonl(Path(args.data_path))
 
-    use_vitokenizer = load_use_vitokenizer(model_dir)
-    texts = [maybe_tokenize_vi(r["text"], use_vitokenizer) for r in subset]
-    X = vectorizer.transform(texts)
+        idxs = load_split_indices(Path(args.split_path), args.split_name)
+        subset = [rows[i] for i in idxs]
 
-    y_true = np.stack([to_multihot(r, label2id, num_labels) for r in subset], axis=0)
+        use_vitokenizer = load_use_vitokenizer(model_dir)
+        texts = [maybe_tokenize_vi(r["text"], use_vitokenizer) for r in subset]
+        X = vectorizer.transform(texts)
+        seed_words_map = load_seed_words_from_model_dir(model_dir)
+        if seed_words_enabled(seed_words_map):
+            seed_feats = build_seed_features(texts, seed_words_map, label_names)
+            X = append_seed_features(X, seed_feats)
+
+        y_true = np.stack([to_multihot(r, label2id, num_labels) for r in subset], axis=0)
     probs = get_scores(model, X)
 
     if probs.shape != y_true.shape:
