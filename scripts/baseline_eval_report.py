@@ -23,6 +23,9 @@ from sklearn.metrics import (
     f1_score,
     precision_score,
     recall_score,
+    hamming_loss,
+    jaccard_score,
+    average_precision_score,
 )
 
 from scripts.baseline_make_splits import (
@@ -76,6 +79,31 @@ def get_scores(model, X) -> np.ndarray:
         scores = np.asarray(model.decision_function(X))
         return sigmoid(scores)
     return np.asarray(model.predict(X)).astype(np.float32)
+
+
+def safe_average_precision(y_true: np.ndarray, probs: np.ndarray, average: str) -> float:
+    try:
+        return float(average_precision_score(y_true, probs, average=average))
+    except ValueError:
+        # Fallback for splits with labels missing positives/negatives
+        per_label = []
+        for j in range(y_true.shape[1]):
+            yj = y_true[:, j]
+            pj = probs[:, j]
+            try:
+                per_label.append(average_precision_score(yj, pj))
+            except ValueError:
+                continue
+        if not per_label:
+            return float("nan")
+        if average == "macro":
+            return float(np.mean(per_label))
+        if average == "micro":
+            valid = [j for j in range(y_true.shape[1]) if np.any(y_true[:, j] == 1) and np.any(y_true[:, j] == 0)]
+            if not valid:
+                return float("nan")
+            return float(average_precision_score(y_true[:, valid].ravel(), probs[:, valid].ravel()))
+        return float(np.mean(per_label))
 
 
 def parse_args():
@@ -161,19 +189,34 @@ def main():
     metrics["f1_weighted"] = float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
     metrics["precision_micro"] = float(precision_score(y_true, y_pred, average="micro", zero_division=0))
     metrics["recall_micro"] = float(recall_score(y_true, y_pred, average="micro", zero_division=0))
-    metrics["exact_match"] = float(np.mean(np.all(y_true == y_pred, axis=1)))
+    metrics["subset_accuracy"] = float(np.mean(np.all(y_true == y_pred, axis=1)))
+    metrics["hamming_loss"] = float(hamming_loss(y_true, y_pred))
+    metrics["jaccard_samples"] = float(jaccard_score(y_true, y_pred, average="samples", zero_division=0))
+    metrics["ap_micro"] = safe_average_precision(y_true, probs, average="micro")
+    metrics["ap_macro"] = safe_average_precision(y_true, probs, average="macro")
 
     print("\n📌Summary metrics:")
-    for k in ["f1_micro", "f1_macro", "f1_weighted", "precision_micro", "recall_micro", "exact_match"]:
+    for k in [
+        "f1_micro",
+        "f1_macro",
+        "f1_weighted",
+        "precision_micro",
+        "recall_micro",
+        "subset_accuracy",
+        "hamming_loss",
+        "jaccard_samples",
+        "ap_micro",
+        "ap_macro",
+    ]:
         print(f"- {k}: {metrics[k]:.6f}")
 
     if args.out_report:
         Path(args.out_report).write_text(report, encoding="utf-8")
-        print("Saved report:", args.out_report)
+        print("💾 Saved report:", args.out_report)
 
     if args.out_metrics:
         Path(args.out_metrics).write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
-        print("Saved metrics:", args.out_metrics)
+        print("💾 Saved metrics:", args.out_metrics)
 
     print("\n")
 

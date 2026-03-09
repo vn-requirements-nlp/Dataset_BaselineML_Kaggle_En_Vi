@@ -19,12 +19,7 @@ Tập tin hiện có:
 - Naive Bayes (`nb`)
 - Logistic Regression (`logreg`)
 - Linear SVM (`linearsvm`)
-- SVM RBF (`svmrbf`)
 - Random Forest (`rf`)
-- Decision Tree (`dt`)
-- KNN (`knn`)
-- Gradient Boosting (`gb`)
-- AdaBoost (`adaboost`)
 - CatBoost (`catboost`)
 
 ## Cài đặt

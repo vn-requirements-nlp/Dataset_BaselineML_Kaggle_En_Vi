@@ -12,6 +12,8 @@ Train traditional ML baselines for multi-label classification (paper-grade):
 
 import argparse
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
 
@@ -61,10 +63,10 @@ def build_model(algo: str, args) -> Any:
         base = LinearSVC(C=args.svm_C)
         return OneVsRestClassifier(base, **ovr_kwargs)
 
-    # SVM (RBF)
-    if algo == "svmrbf":
-        base = SVC(kernel="rbf", C=args.svm_C, gamma=args.svm_gamma, probability=False)
-        return OneVsRestClassifier(base, n_jobs=1)
+    # # SVM (RBF)
+    # if algo == "svmrbf":
+    #     base = SVC(kernel="rbf", C=args.svm_C, gamma=args.svm_gamma, probability=False)
+    #     return OneVsRestClassifier(base, n_jobs=1)
 
     # Random Forest
     if algo == "rf":
@@ -76,38 +78,38 @@ def build_model(algo: str, args) -> Any:
         )
         return OneVsRestClassifier(base, **ovr_kwargs)
     
-    # Decision Tree
-    if algo == "dt":
-        base = DecisionTreeClassifier(random_state=args.seed)
-        return OneVsRestClassifier(base, **ovr_kwargs)
+    # # Decision Tree
+    # if algo == "dt":
+    #     base = DecisionTreeClassifier(random_state=args.seed)
+    #     return OneVsRestClassifier(base, **ovr_kwargs)
 
     # KNN
     # KNN chạy khá chậm với TF-IDF dimension lớn, nên cẩn thận
-    if algo == "knn3":
-        base = KNeighborsClassifier(n_neighbors=3, n_jobs=args.rf_n_jobs)
-        return OneVsRestClassifier(base, **ovr_kwargs)
+    # if algo == "knn3":
+    #     base = KNeighborsClassifier(n_neighbors=3, n_jobs=args.rf_n_jobs)
+    #     return OneVsRestClassifier(base, **ovr_kwargs)
     
-    if algo == "knn5":
-        base = KNeighborsClassifier(n_neighbors=5, n_jobs=args.rf_n_jobs)
-        return OneVsRestClassifier(base, **ovr_kwargs)
+    # if algo == "knn5":
+    #     base = KNeighborsClassifier(n_neighbors=5, n_jobs=args.rf_n_jobs)
+    #     return OneVsRestClassifier(base, **ovr_kwargs)
 
-    if algo == "knn7":
-        base = KNeighborsClassifier(n_neighbors=7, n_jobs=args.rf_n_jobs)
-        return OneVsRestClassifier(base, **ovr_kwargs)
+    # if algo == "knn7":
+    #     base = KNeighborsClassifier(n_neighbors=7, n_jobs=args.rf_n_jobs)
+    #     return OneVsRestClassifier(base, **ovr_kwargs)
 
     # Gradient Boosting (sklearn)
-    if algo == "gb":
-        base = GradientBoostingClassifier(
-            n_estimators=100, learning_rate=0.1, random_state=args.seed
-        )
-        return OneVsRestClassifier(base, **ovr_kwargs)
+    # if algo == "gb":
+    #     base = GradientBoostingClassifier(
+    #         n_estimators=100, learning_rate=0.1, random_state=args.seed
+    #     )
+    #     return OneVsRestClassifier(base, **ovr_kwargs)
 
     # AdaBoost
-    if algo == "adaboost":
-        base = AdaBoostClassifier(
-            n_estimators=50, random_state=args.seed
-        )
-        return OneVsRestClassifier(base, **ovr_kwargs)
+    # if algo == "adaboost":
+    #     base = AdaBoostClassifier(
+    #         n_estimators=50, random_state=args.seed
+    #     )
+    #     return OneVsRestClassifier(base, **ovr_kwargs)
 
     # CatBoost
     if algo == "catboost":
@@ -144,7 +146,8 @@ def parse_args():
     ap.add_argument(
         "--algo",
         default="logreg",
-        choices=["nb", "logreg", "linearsvm", "svmrbf", "rf", "dt", "knn3", "knn5", "knn7", "gb", "adaboost", "catboost"],
+        # choices=["nb", "logreg", "linearsvm", "svmrbf", "rf", "dt", "knn3", "knn5", "knn7", "gb", "adaboost", "catboost"],
+        choices=["nb", "logreg", "linearsvm", "rf", "catboost"],
     )
 
     # TF-IDF params
@@ -154,6 +157,11 @@ def parse_args():
     ap.add_argument("--min_df", type=int, default=1)
     ap.add_argument("--use_vitokenizer", action="store_true", help="Tokenize Vietnamese text with pyvi")
     ap.add_argument("--seed_words_json", default=None, help="JSON file: {label: [seed_word, ...]}")
+    ap.add_argument(
+        "--tune_thresholds",
+        action="store_true",
+        help="Auto-run baseline_tune_thresholds.py on VAL after training.",
+    )
 
     # Seeds
     ap.add_argument("--seed", type=int, default=42)
@@ -336,13 +344,39 @@ def main():
             "label_to_words": seed_words_map,
             "feature_type": "presence",
         },
+        "thresholds": {
+            "tune": bool(args.tune_thresholds),
+        },
     }
     (out_dir / "train_config.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print("✅ Saved:", out_dir)
     print("- vectorizer.pkl")
     print("- model.pkl")
-    print("- thresholds.json (tune next)")
+    if args.tune_thresholds:
+        script_path = Path(__file__).resolve().parent / "baseline_tune_thresholds.py"
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--model_dir",
+            str(out_dir),
+            "--data_path",
+            str(data_path),
+            "--labelmap_path",
+            str(labelmap_path),
+            "--split_path",
+            str(split_path),
+            "--split_name",
+            "val",
+        ]
+        if args.precomputed_dir:
+            cmd += ["--precomputed_dir", str(args.precomputed_dir)]
+        print("🧪 Tune thresholds (VAL) ...")
+        subprocess.check_call(cmd)
+        print("- thresholds.json (tuned)")
+    else:
+        print("- thresholds.json (not tuned)")
+
     print("🎉 Done!")
 
 
